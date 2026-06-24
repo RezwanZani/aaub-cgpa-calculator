@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { Plane, RotateCcw, CheckCircle2, Circle, Radio, Gauge as GaugeIcon } from "lucide-react";
+import { predictCGPA } from "./prediction";
 import {
   LineChart,
   Line,
@@ -212,60 +213,74 @@ function FunnyMessageCard({ cgpa }) {
 }
 
 function prepareChartData(perSemStats) {
-  let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0, n = 0;
-  
-  const data = SEMESTERS.map((s, index) => {
-    const st = perSemStats[s.id];
-    const x = index + 1;
-    const y = st.gpa;
-    if (y !== null) {
-      n++;
-      sumX += x;
-      sumY += y;
-      sumXY += x * y;
-      sumXX += x * x;
-    }
-    return {
-      name: `S${s.id}`,
-      sgpa: st.gpa !== null ? Number(st.gpa.toFixed(2)) : null,
-      x
-    };
-  });
+  const completedSemesters = [];
+  const futureSemesters = [];
 
   let runningPoints = 0;
   let runningCredits = 0;
-  let m = 0, c = 0;
-  if (n > 1) {
-    m = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
-    c = (sumY - m * sumX) / n;
-  } else if (n === 1) {
-    m = 0;
-    c = sumY;
-  }
 
-  return data.map((d, index) => {
-    const s = SEMESTERS[index];
+  const data = SEMESTERS.map((s) => {
     const st = perSemStats[s.id];
     
     if (st.gpa !== null) {
       runningPoints += st.points;
       runningCredits += st.gradedCredit;
+      const cgpa = runningCredits > 0 ? runningPoints / runningCredits : null;
+      
+      completedSemesters.push({
+        id: s.id,
+        sgpa: st.gpa,
+        points: st.points,
+        credits: st.gradedCredit
+      });
+      
+      return {
+        name: `S${s.id}`,
+        sgpa: Number(st.gpa.toFixed(2)),
+        cgpa: Number(cgpa.toFixed(2)),
+        predictedSgpa: null,
+        predictedCgpa: null
+      };
+    } else {
+      futureSemesters.push({
+        id: s.id,
+        credits: st.totalCredit > 0 ? st.totalCredit : s.courses.reduce((a, c) => a + c.credit, 0)
+      });
+      return {
+        name: `S${s.id}`,
+        sgpa: null,
+        cgpa: null,
+      };
     }
-    const cgpa = runningCredits > 0 ? runningPoints / runningCredits : null;
-    
-    let trend = null;
-    if (n > 0) {
-       trend = Number((m * d.x + c).toFixed(2));
-       if (trend > 4.0) trend = 4.0;
-       if (trend < 0) trend = 0;
-    }
-
-    return {
-      ...d,
-      cgpa: cgpa !== null ? Number(cgpa.toFixed(2)) : null,
-      trend: trend
-    };
   });
+
+  const predictionResult = predictCGPA(completedSemesters, futureSemesters);
+  
+  if (predictionResult.projections) {
+    let simPoints = runningPoints;
+    let simCredits = runningCredits;
+
+    predictionResult.projections.forEach(p => {
+      const targetData = data.find(d => d.name === `S${p.id}`);
+      if (targetData) {
+        simPoints += p.likelySgpa * p.credits;
+        simCredits += p.credits;
+        const simCgpa = simCredits > 0 ? simPoints / simCredits : null;
+        
+        targetData.predictedSgpa = Number(p.likelySgpa.toFixed(2));
+        targetData.predictedCgpa = Number(simCgpa.toFixed(2));
+      }
+    });
+  }
+
+  // Link the last known real point to the predicted path for a smooth line
+  if (completedSemesters.length > 0 && futureSemesters.length > 0) {
+     const lastIdx = completedSemesters.length - 1;
+     data[lastIdx].predictedSgpa = data[lastIdx].sgpa;
+     data[lastIdx].predictedCgpa = data[lastIdx].cgpa;
+  }
+
+  return { chartData: data, ranges: predictionResult.ranges };
 }
 
 /* -------------------------------- GAUGE UI -------------------------------- */
@@ -393,7 +408,7 @@ export default function App() {
     [grades]
   );
 
-  const chartData = useMemo(() => prepareChartData(perSemStats), [perSemStats]);
+  const { chartData, ranges } = useMemo(() => prepareChartData(perSemStats), [perSemStats]);
 
   const overall = useMemo(() => {
     let points = 0,
@@ -420,31 +435,31 @@ export default function App() {
 
   return (
     <div className="min-h-screen w-full bg-slate-100 text-slate-800 font-sans">
-      <div className="max-w-7xl mx-auto px-4 py-8 sm:px-6">
+      <div className="max-w-[1400px] mx-auto px-4 py-8 sm:px-8">
         
         {/* HEADER */}
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-8 pb-4 border-b border-slate-300">
-          <div className="flex items-center gap-4">
-            <div className="p-3 rounded-2xl bg-gradient-to-br from-indigo-100 to-white border border-indigo-200 shadow-sm">
-              <Plane className="w-7 h-7 text-indigo-600" strokeWidth={2} />
+        <div className="flex items-start sm:items-center justify-between mb-8 pb-4 border-b border-slate-300 gap-2">
+          <div className="flex items-center gap-3 sm:gap-4 min-w-0">
+            <div className="p-2 sm:p-3 rounded-2xl bg-gradient-to-br from-indigo-100 to-white border border-indigo-200 shadow-sm shrink-0">
+              <Plane className="w-6 h-6 sm:w-7 sm:h-7 text-indigo-600" strokeWidth={2} />
             </div>
-            <div>
-              <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 font-mono">
+            <div className="min-w-0">
+              <h1 className="text-[13px] sm:text-2xl font-bold tracking-tight text-slate-900 font-mono truncate">
                 AAUB CGPA CALCULATOR
               </h1>
-              <p className="text-xs sm:text-sm text-slate-500 tracking-wide mt-0.5">
+              <p className="text-[10px] sm:text-sm text-slate-500 tracking-wide mt-0.5 truncate">
                 (Avionics Engineering)
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2 text-xs font-medium mt-4 sm:mt-0 px-3 py-1.5 rounded-full bg-white border border-emerald-200 shadow-sm">
-            <Radio className="w-4 h-4 text-emerald-500" />
+          <div className="flex items-center gap-1.5 sm:gap-2 text-[10px] sm:text-xs font-medium px-2.5 sm:px-3 py-1.5 rounded-full bg-white border border-emerald-200 shadow-sm shrink-0 mt-1 sm:mt-0">
+            <Radio className="w-3 h-3 sm:w-4 sm:h-4 text-emerald-500" />
             <span className="text-emerald-600">{flash ? "SAVED" : "STANDBY"}</span>
           </div>
         </div>
 
         {/* LAYOUT: LEFT & RIGHT COLUMNS */}
-        <div className="grid grid-cols-1 xl:grid-cols-[1fr_400px] gap-8">
+        <div className="grid grid-cols-1 xl:grid-cols-[1fr_480px] gap-8">
           
           {/* LEFT COLUMN: Main CGPA Form and Overall Gauge */}
           <div className="flex flex-col gap-6">
@@ -631,37 +646,45 @@ export default function App() {
             </div>
 
             {/* CHART AREA */}
-            <div className="bg-gradient-to-br from-fuchsia-50 to-pink-50 border border-pink-100 rounded-2xl p-6 shadow-sm flex flex-col">
-              <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
-                <h2 className="text-sm font-bold text-pink-900 uppercase tracking-widest flex items-center gap-2">
-                  <GaugeIcon className="w-4 h-4 text-pink-600" />
+            <div className="bg-gradient-to-br from-slate-50 to-white border border-slate-200 rounded-2xl p-6 shadow-sm flex flex-col">
+              <div className="flex flex-col gap-2 mb-4">
+                <h2 className="text-sm font-bold text-slate-800 uppercase tracking-widest flex items-center gap-2">
+                  <GaugeIcon className="w-4 h-4 text-indigo-500" />
                   Performance Graph
                 </h2>
-                {chartData[7]?.trend !== null && (
-                  <div className="bg-white/80 text-pink-700 text-[10px] font-bold px-2.5 py-1 rounded-lg border border-pink-200 shadow-sm">
-                    PROJECTED FINAL CGPA: <span className="text-sm font-mono ml-1">{chartData[7].trend.toFixed(2)}</span>
+                {ranges && (
+                  <div className="flex items-center gap-3">
+                    <div className="bg-indigo-50 text-indigo-700 text-xs font-bold px-3 py-1.5 rounded-lg border border-indigo-200 shadow-sm">
+                      EXPECTED FINAL CGPA: <span className="text-base font-mono ml-1">{ranges.likely.toFixed(2)}</span>
+                    </div>
+                    <span className="text-[10px] font-medium text-slate-500 uppercase tracking-wide">
+                      Range: {ranges.conservative.toFixed(2)} (Safe) — {ranges.optimistic.toFixed(2)} (Opt)
+                    </span>
                   </div>
                 )}
               </div>
-              <p className="text-[11px] text-pink-700/80 mb-4 font-medium uppercase tracking-wide">
-                <span className="font-bold text-pink-800">SGPA:</span> Semester GPA &nbsp;&middot;&nbsp; 
-                <span className="font-bold text-pink-800">CGPA:</span> Cumulative GPA &nbsp;&middot;&nbsp; 
-                <span className="font-bold text-pink-800">Trend:</span> Forecast
+              <p className="text-[11px] text-slate-600 font-medium uppercase tracking-wide mb-1">
+                <span className="font-bold text-slate-800">SGPA/CGPA:</span> Real Data &nbsp;&middot;&nbsp; 
+                <span className="font-bold text-slate-800">Thin lines:</span> Projected
               </p>
-              <div className="w-full h-64 bg-white/60 rounded-xl p-2 border border-pink-50/50">
+              <p className="text-[10px] text-slate-400 mb-4 italic leading-tight">
+                * Note: Predictions are purely mathematical estimates based on rhythm, trend, and decay, not actual reality.
+              </p>
+              <div className="w-full h-80 bg-white/60 rounded-xl p-2 border border-slate-100">
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#fbcfe8" vertical={false} />
-                    <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#831843' }} />
-                    <YAxis domain={[0, 4.0]} axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#831843' }} />
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+                    <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b' }} />
+                    <YAxis domain={[0, 4.0]} axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b' }} />
                     <Tooltip 
-                      contentStyle={{ borderRadius: '12px', border: '1px solid #fbcfe8', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                      labelStyle={{ fontWeight: 'bold', color: '#831843', marginBottom: '4px' }}
+                      contentStyle={{ borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                      labelStyle={{ fontWeight: 'bold', color: '#334155', marginBottom: '4px' }}
                     />
-                    <Legend iconType="circle" wrapperStyle={{ fontSize: '11px', fontWeight: 'bold', color: '#831843' }} />
-                    <Line type="monotone" dataKey="sgpa" name="SGPA" stroke="#d946ef" strokeWidth={3} dot={{ r: 4 }} activeDot={{ r: 6 }} />
-                    <Line type="monotone" dataKey="cgpa" name="CGPA" stroke="#8b5cf6" strokeWidth={3} dot={{ r: 4 }} activeDot={{ r: 6 }} />
-                    <Line type="monotone" dataKey="trend" name="Trend" stroke="#f59e0b" strokeWidth={2} strokeDasharray="5 5" dot={false} />
+                    <Legend iconType="circle" wrapperStyle={{ fontSize: '11px', fontWeight: 'bold', color: '#475569' }} />
+                    <Line type="monotone" dataKey="sgpa" name="Real SGPA" stroke="#8b5cf6" strokeWidth={3} dot={{ r: 5, strokeWidth: 2 }} activeDot={{ r: 7 }} />
+                    <Line type="monotone" dataKey="cgpa" name="Real CGPA" stroke="#0ea5e9" strokeWidth={3} dot={{ r: 5, strokeWidth: 2 }} activeDot={{ r: 7 }} />
+                    <Line type="monotone" dataKey="predictedSgpa" name="Predicted SGPA" stroke="#c4b5fd" strokeWidth={1.5} dot={{ r: 5, fill: "#f5f3ff", stroke: "#8b5cf6", strokeWidth: 2 }} activeDot={{ r: 7 }} />
+                    <Line type="monotone" dataKey="predictedCgpa" name="Predicted CGPA" stroke="#7dd3fc" strokeWidth={1.5} dot={{ r: 5, fill: "#f0f9ff", stroke: "#0ea5e9", strokeWidth: 2 }} activeDot={{ r: 7 }} />
                   </LineChart>
                 </ResponsiveContainer>
               </div>
