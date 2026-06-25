@@ -262,7 +262,7 @@ function prepareChartData(perSemStats) {
 
     predictionResult.projections.forEach(p => {
       const targetData = data.find(d => d.name === `S${p.id}`);
-      if (targetData) {
+      if (targetData && p.likelySgpa !== null) {
         simPoints += p.likelySgpa * p.credits;
         simCredits += p.credits;
         const simCgpa = simCredits > 0 ? simPoints / simCredits : null;
